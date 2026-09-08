@@ -1,0 +1,619 @@
+-- [[ DELTA ULTRA-FAST LOW PLAYER HOPPER - COMPACT UI VERSION ]] --
+
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Lighting = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+
+--------------------------------------------------------------------------------
+-- 1. AXION UI ENGINE
+--------------------------------------------------------------------------------
+local AxionLibrary = {}
+
+local function GetGuiParent()
+    local success, result = pcall(function()
+        if gethui then
+            return gethui()
+        elseif syn and syn.protect_gui then
+            return CoreGui
+        end
+        return CoreGui
+    end)
+    return success and result or CoreGui
+end
+
+local GuiParent = GetGuiParent()
+
+local function CleanupAllBlur()
+    for _, effect in pairs(Lighting:GetChildren()) do
+        if effect:IsA("BlurEffect") and effect.Name:find("Axion") then
+            effect:Destroy()
+        end
+    end
+end
+
+local Themes = {
+    Default = {
+        Background = Color3.fromRGB(15, 15, 22),
+        BackgroundTransparency = 0.1,
+        Container = Color3.fromRGB(22, 22, 30),
+        ContainerTransparency = 0.15,
+        Element = Color3.fromRGB(28, 28, 38),
+        ElementTransparency = 0.2,
+        ElementHover = Color3.fromRGB(38, 38, 50),
+        Accent = Color3.fromRGB(0, 168, 255),
+        AccentDark = Color3.fromRGB(0, 120, 200),
+        AccentGlow = Color3.fromRGB(80, 200, 255),
+        Text = Color3.fromRGB(255, 255, 255),
+        TextDark = Color3.fromRGB(180, 180, 200),
+        TextMuted = Color3.fromRGB(110, 110, 130),
+        Border = Color3.fromRGB(40, 40, 52),
+        BorderTransparency = 0.4,
+        GradientStart = Color3.fromRGB(25, 25, 35),
+        GradientEnd = Color3.fromRGB(12, 12, 18),
+        Font = Enum.Font.Gotham
+    }
+}
+
+local Utility = {}
+
+function Utility:Create(instanceType, properties, children)
+    local instance = Instance.new(instanceType)
+    for property, value in pairs(properties or {}) do
+        if property ~= "Parent" then
+            instance[property] = value
+        end
+    end
+    for _, child in pairs(children or {}) do
+        child.Parent = instance
+    end
+    if properties and properties.Parent then
+        instance.Parent = properties.Parent
+    end
+    return instance
+end
+
+function Utility:Tween(instance, properties, duration, easingStyle, easingDirection)
+    if not instance then return end
+    local tweenInfo = TweenInfo.new(
+        duration or 0.25,
+        easingStyle or Enum.EasingStyle.Quart,
+        easingDirection or Enum.EasingDirection.Out
+    )
+    local tween = TweenService:Create(instance, tweenInfo, properties)
+    tween:Play()
+    return tween
+end
+
+-- Click Bounce Animation
+function Utility:AnimateClick(instance)
+    if not instance then return end
+    local originalSize = instance.Size
+    Utility:Tween(instance, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset - 4, originalSize.Y.Scale, originalSize.Y.Offset - 4)}, 0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    task.delay(0.08, function()
+        Utility:Tween(instance, {Size = originalSize}, 0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    end)
+end
+
+function Utility:MakeDraggable(frame, handle, config)
+    local dragging, dragInput, dragStart, startPos
+    
+    local function handleInput(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end
+    
+    local function handleInputChanged(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end
+    
+    local function handleUserInputChanged(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            Utility:Tween(frame, {
+                Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            }, (config.AnimationSpeed or 0.25) * 0.5)
+        end
+    end
+    
+    handle.InputBegan:Connect(handleInput)
+    handle.InputChanged:Connect(handleInputChanged)
+    UserInputService.InputChanged:Connect(handleUserInputChanged)
+end
+
+function AxionLibrary:CreateWindow(options)
+    options = options or {}
+    
+    CleanupAllBlur()
+    if GuiParent:FindFirstChild("ServerHopUI") then
+        GuiParent:FindFirstChild("ServerHopUI"):Destroy()
+    end
+    
+    local windowName = options.Name or "PRIVATE SERVERS"
+    local windowSubtitle = options.Subtitle or "by Delta Utility"
+    local windowVersion = options.Version or "v2.0"
+    local theme = Themes.Default
+    
+    local Config = {
+        AnimationSpeed = 0.25,
+        CornerRadius = 10,
+        ElementCornerRadius = 6
+    }
+    
+    local Window = {
+        Tabs = {},
+        CurrentTab = nil,
+        Theme = theme
+    }
+    
+    local ScreenGui = Utility:Create("ScreenGui", {
+        Name = "ServerHopUI",
+        Parent = GuiParent,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true
+    })
+    
+    -- Main UI Frame (Resized smaller to 380x280)
+    local MainContainer = Utility:Create("Frame", {
+        Name = "MainContainer",
+        Parent = ScreenGui,
+        BackgroundColor3 = theme.Background,
+        BackgroundTransparency = theme.BackgroundTransparency,
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = UDim2.new(0, 380, 0, 280),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        ClipsDescendants = true
+    }, {
+        Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.CornerRadius) }),
+        Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1.5 }),
+        Utility:Create("UIGradient", {
+            Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, theme.GradientStart), ColorSequenceKeypoint.new(1, theme.GradientEnd) }),
+            Rotation = 135
+        })
+    })
+
+    -- Header Panel
+    local Header = Utility:Create("Frame", {
+        Name = "Header",
+        Parent = MainContainer,
+        BackgroundColor3 = theme.Container,
+        BackgroundTransparency = theme.ContainerTransparency,
+        Position = UDim2.new(0, 8, 0, 8),
+        Size = UDim2.new(1, -16, 0, 36)
+    }, {
+        Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.CornerRadius) }),
+        Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1 })
+    })
+
+    Utility:Create("TextLabel", {
+        Name = "Title",
+        Parent = Header,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 10, 0, 2),
+        Size = UDim2.new(0.6, 0, 0, 18),
+        Font = theme.Font,
+        Text = windowName,
+        TextColor3 = theme.Accent,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left
+    })
+
+    Utility:Create("TextLabel", {
+        Name = "Subtitle",
+        Parent = Header,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 10, 0, 18),
+        Size = UDim2.new(0.6, 0, 0, 14),
+        Font = theme.Font,
+        Text = windowSubtitle .. " | " .. windowVersion,
+        TextColor3 = theme.TextMuted,
+        TextSize = 9,
+        TextXAlignment = Enum.TextXAlignment.Left
+    })
+
+    -- Close Button
+    local CloseBtn = Utility:Create("TextButton", {
+        Name = "Close",
+        Parent = Header,
+        BackgroundColor3 = theme.Element,
+        BackgroundTransparency = theme.ElementTransparency,
+        Position = UDim2.new(1, -28, 0.5, -11),
+        Size = UDim2.new(0, 22, 0, 22),
+        Font = theme.Font,
+        Text = "X",
+        TextColor3 = theme.TextDark,
+        TextSize = 11,
+        AutoButtonColor = false
+    }, {
+        Utility:Create("UICorner", { CornerRadius = UDim.new(0, 4) }),
+        Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1 })
+    })
+
+    -- Re-Open Box Toggle Button
+    local ToggleBtn = Utility:Create("TextButton", {
+        Name = "ToggleUI",
+        Parent = ScreenGui,
+        BackgroundColor3 = theme.Background,
+        Position = UDim2.new(0, 20, 0.5, -25),
+        Size = UDim2.new(0, 50, 0, 50),
+        Font = theme.Font,
+        Text = "Toggle",
+        TextColor3 = theme.Accent,
+        TextSize = 11,
+        Visible = false
+    }, {
+        Utility:Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+        Utility:Create("UIStroke", { Color = theme.Accent, Thickness = 1.5 })
+    })
+
+    CloseBtn.MouseButton1Click:Connect(function()
+        Utility:AnimateClick(CloseBtn)
+        task.wait(0.08)
+        MainContainer.Visible = false
+        ToggleBtn.Visible = true
+    end)
+
+    ToggleBtn.MouseButton1Click:Connect(function()
+        Utility:AnimateClick(ToggleBtn)
+        task.wait(0.08)
+        MainContainer.Visible = true
+        ToggleBtn.Visible = false
+    end)
+
+    Utility:MakeDraggable(MainContainer, Header, Config)
+    Utility:MakeDraggable(ToggleBtn, ToggleBtn, Config)
+
+    -- Container Work Areas
+    local ContentArea = Utility:Create("Frame", {
+        Name = "ContentArea",
+        Parent = MainContainer,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 8, 0, 50),
+        Size = UDim2.new(1, -16, 1, -58)
+    })
+
+    local TabContainer = Utility:Create("Frame", {
+        Name = "TabContainer",
+        Parent = ContentArea,
+        BackgroundColor3 = theme.Container,
+        BackgroundTransparency = theme.ContainerTransparency,
+        Size = UDim2.new(0, 100, 1, 0)
+    }, {
+        Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.CornerRadius) }),
+        Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1 })
+    })
+
+    local TabList = Utility:Create("ScrollingFrame", {
+        Name = "TabList",
+        Parent = TabContainer,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 4, 0, 4),
+        Size = UDim2.new(1, -8, 1, -8),
+        ScrollBarThickness = 0,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y
+    }, {
+        Utility:Create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4) })
+    })
+
+    local MainContent = Utility:Create("Frame", {
+        Name = "MainContent",
+        Parent = ContentArea,
+        BackgroundColor3 = theme.Container,
+        BackgroundTransparency = theme.ContainerTransparency,
+        Position = UDim2.new(0, 106, 0, 0),
+        Size = UDim2.new(1, -106, 1, 0),
+        ClipsDescendants = true
+    }, {
+        Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.CornerRadius) }),
+        Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1 })
+    })
+
+    function Window:CreateTab(tabName)
+        local Tab = { Name = tabName }
+        
+        local TabButton = Utility:Create("TextButton", {
+            Name = tabName,
+            Parent = TabList,
+            BackgroundColor3 = theme.Element,
+            BackgroundTransparency = theme.ElementTransparency,
+            Size = UDim2.new(1, 0, 0, 30),
+            Font = theme.Font,
+            Text = tabName,
+            TextColor3 = theme.TextDark,
+            TextSize = 11,
+            AutoButtonColor = false
+        }, {
+            Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.ElementCornerRadius) })
+        })
+
+        local TabContent = Utility:Create("ScrollingFrame", {
+            Name = tabName .. "Content",
+            Parent = MainContent,
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 8, 0, 8),
+            Size = UDim2.new(1, -16, 1, -16),
+            ScrollBarThickness = 2,
+            ScrollBarImageColor3 = theme.Accent,
+            CanvasSize = UDim2.new(0, 0, 0, 0),
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            Visible = false
+        }, {
+            Utility:Create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6) })
+        })
+
+        TabButton.MouseButton1Click:Connect(function()
+            Utility:AnimateClick(TabButton)
+            for _, t in pairs(Window.Tabs) do
+                t.Button.BackgroundColor3 = theme.Element
+                t.Button.TextColor3 = theme.TextDark
+                t.Content.Visible = false
+            end
+            TabButton.BackgroundColor3 = theme.Accent
+            TabButton.TextColor3 = theme.Text
+            TabContent.Visible = true
+        end)
+
+        if #Window.Tabs == 0 then
+            TabButton.BackgroundColor3 = theme.Accent
+            TabButton.TextColor3 = theme.Text
+            TabContent.Visible = true
+        end
+
+        Tab.Button = TabButton
+        Tab.Content = TabContent
+        table.insert(Window.Tabs, Tab)
+
+        function Tab:CreateButton(name, callback)
+            local Btn = Utility:Create("TextButton", {
+                Parent = TabContent,
+                BackgroundColor3 = theme.Element,
+                BackgroundTransparency = theme.ElementTransparency,
+                Size = UDim2.new(1, 0, 0, 32),
+                Font = theme.Font,
+                Text = name,
+                TextColor3 = theme.Text,
+                TextSize = 11,
+                AutoButtonColor = false
+            }, {
+                Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.ElementCornerRadius) }),
+                Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1 })
+            })
+
+            Btn.MouseEnter:Connect(function()
+                Utility:Tween(Btn, {BackgroundColor3 = theme.ElementHover}, 0.2)
+            end)
+            Btn.MouseLeave:Connect(function()
+                Utility:Tween(Btn, {BackgroundColor3 = theme.Element}, 0.2)
+            end)
+            Btn.MouseButton1Click:Connect(function()
+                Utility:AnimateClick(Btn)
+                callback(Btn)
+            end)
+
+            return Btn
+        end
+
+        function Tab:CreateToggle(name, default, callback)
+            local state = default or false
+            local Btn = Utility:Create("TextButton", {
+                Parent = TabContent,
+                BackgroundColor3 = state and theme.Accent or theme.Element,
+                BackgroundTransparency = theme.ElementTransparency,
+                Size = UDim2.new(1, 0, 0, 32),
+                Font = theme.Font,
+                Text = name .. ": " .. (state and "ENABLED" or "DISABLED"),
+                TextColor3 = theme.Text,
+                TextSize = 10,
+                AutoButtonColor = false
+            }, {
+                Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.ElementCornerRadius) }),
+                Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1 })
+            })
+
+            Btn.MouseButton1Click:Connect(function()
+                Utility:AnimateClick(Btn)
+                state = not state
+                Btn.BackgroundColor3 = state and theme.Accent or theme.Element
+                Btn.Text = name .. ": " .. (state and "ENABLED" or "DISABLED")
+                callback(state)
+            end)
+
+            return Btn
+        end
+
+        function Tab:CreateInput(placeholder, defaultText, callback)
+            local InputFrame = Utility:Create("Frame", {
+                Parent = TabContent,
+                BackgroundColor3 = theme.Element,
+                BackgroundTransparency = theme.ElementTransparency,
+                Size = UDim2.new(1, 0, 0, 32)
+            }, {
+                Utility:Create("UICorner", { CornerRadius = UDim.new(0, Config.ElementCornerRadius) }),
+                Utility:Create("UIStroke", { Color = theme.Border, Transparency = theme.BorderTransparency, Thickness = 1 })
+            })
+
+            local Box = Utility:Create("TextBox", {
+                Parent = InputFrame,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, -16, 1, 0),
+                Position = UDim2.new(0, 8, 0, 0),
+                Font = theme.Font,
+                PlaceholderText = placeholder,
+                Text = defaultText or "",
+                TextColor3 = theme.Text,
+                TextSize = 11,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            Box.FocusLost:Connect(function()
+                callback(Box.Text)
+            end)
+
+            return Box
+        end
+
+        function Tab:CreateLabel(text)
+            local Label = Utility:Create("TextLabel", {
+                Parent = TabContent,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 18),
+                Font = theme.Font,
+                Text = text,
+                TextColor3 = theme.AccentGlow,
+                TextSize = 10,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+            return Label
+        end
+
+        return Tab
+    end
+
+    return Window
+end
+
+--------------------------------------------------------------------------------
+-- 2. SERVER HOPPER SYSTEM IMPLEMENTATION
+--------------------------------------------------------------------------------
+
+local Window = AxionLibrary:CreateWindow({
+    Name = "PRIVATE SERVERS",
+    Subtitle = "by Delta Utility",
+    Version = "v2.0"
+})
+
+local MainTab = Window:CreateTab("Server Hopper")
+
+-- Display Player Status Info
+local StatusLabel = MainTab:CreateLabel("Current Server: " .. #Players:GetPlayers() .. " player(s)")
+
+-- Threshold Setting Options
+local maxPlayers = 1
+MainTab:CreateInput("Max Target Players", "1", function(val)
+    maxPlayers = tonumber(val) or 1
+end)
+
+local autoDetectThreshold = 3
+MainTab:CreateInput("Auto Hop Player Limit", "3", function(val)
+    autoDetectThreshold = tonumber(val) or 3
+end)
+
+local searching = false
+local HopBtnRef
+
+local function FindAndJoinServer(buttonRef)
+    if searching then return end
+    searching = true
+    
+    local placeId = game.PlaceId
+    local currentJob = game.JobId
+    
+    local targetBtn = buttonRef or HopBtnRef
+    if targetBtn then targetBtn.Text = "SEARCHING..." end
+    
+    task.spawn(function()
+        local cursor = ""
+        local pagesToSkip = math.random(5, 12)
+        local targetServer = nil
+        
+        for i = 1, pagesToSkip do
+            local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Desc&limit=100" .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
+            local reqSuccess, rawData = pcall(function() return game:HttpGet(url) end)
+            if reqSuccess and rawData then
+                local decodeSuccess, decoded = pcall(function() return HttpService:JSONDecode(rawData) end)
+                if decodeSuccess and decoded and decoded.nextPageCursor then
+                    cursor = decoded.nextPageCursor
+                else
+                    break
+                end
+            else
+                break
+            end
+        end
+        
+        local searchUrl = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100" .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
+        local reqSuccess, rawData = pcall(function() return game:HttpGet(searchUrl) end)
+        
+        if reqSuccess and rawData then
+            local decodeSuccess, decoded = pcall(function() return HttpService:JSONDecode(rawData) end)
+            if decodeSuccess and decoded and decoded.data then
+                local candidates = {}
+                for _, server in ipairs(decoded.data) do
+                    if server.id ~= currentJob and server.playing <= maxPlayers and server.playing > 0 then
+                        table.insert(candidates, server)
+                    end
+                end
+                
+                if #candidates > 0 then
+                    table.sort(candidates, function(a, b) return a.playing < b.playing end)
+                    targetServer = candidates[1]
+                end
+            end
+        end
+        
+        if targetServer then
+            if targetBtn then targetBtn.Text = "JOINING (" .. targetServer.playing .. ")..." end
+            TeleportService:TeleportToPlaceInstance(placeId, targetServer.id, LocalPlayer)
+        else
+            if targetBtn then targetBtn.Text = "RETRYING..." end
+            task.wait(0.5)
+            searching = false
+            FindAndJoinServer(targetBtn)
+        end
+    end)
+end
+
+-- Primary Hop Action Button
+HopBtnRef = MainTab:CreateButton("HOP SERVER NOW", function()
+    FindAndJoinServer(HopBtnRef)
+end)
+
+-- Auto Detect Toggle and Detection Logic
+local autoDetectActive = false
+
+local function CheckPlayerThreshold()
+    local currentCount = #Players:GetPlayers()
+    StatusLabel.Text = "Current Server: " .. currentCount .. " player(s)"
+    
+    if autoDetectActive and currentCount >= autoDetectThreshold then
+        FindAndJoinServer(HopBtnRef)
+    end
+end
+
+MainTab:CreateToggle("AUTO DETECT HOP", false, function(state)
+    autoDetectActive = state
+    if autoDetectActive then
+        CheckPlayerThreshold()
+    end
+end)
+
+Players.PlayerAdded:Connect(CheckPlayerThreshold)
+Players.PlayerRemoving:Connect(CheckPlayerThreshold)
+
+-- Automated Background Server Switcher
+local autoHopActive = false
+MainTab:CreateToggle("AUTO HOP", false, function(state)
+    autoHopActive = state
+    if autoHopActive then
+        FindAndJoinServer(HopBtnRef)
+    end
+end)
+
